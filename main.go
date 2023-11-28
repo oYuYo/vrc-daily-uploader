@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,8 +12,11 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"time"
 	"vrc-daily-uploader/flickrapi"
 )
+
+const TimeoutSeconds = 3
 
 func config() (flickrapi.Config, error) {
 	var conf flickrapi.Config
@@ -24,13 +28,26 @@ func config() (flickrapi.Config, error) {
 	return conf, nil
 }
 
-func getPhotosSearch(conf flickrapi.Config, pageNum string, ch chan<- flickrapi.PhotosSearchJson, wg *sync.WaitGroup) {
+func getPhotosSearchWithContext(ctx context.Context, conf flickrapi.Config, pageNum string, ch chan<- flickrapi.PhotosSearchJson, wg *sync.WaitGroup) {
 	defer wg.Done()
+
+	select {
+	case <-ctx.Done():
+		log.Fatal("error: Connection timeout")
+	default:
+		searchJson, err := getPhotosSearch(conf, pageNum)
+		if err != nil {
+			log.Fatal(err)
+		}
+		ch <- searchJson
+	}
+}
+
+func getPhotosSearch(conf flickrapi.Config, pageNum string) (flickrapi.PhotosSearchJson, error) {
 
 	u, err := url.Parse(conf.SearchEndPoint)
 	if err != nil {
-		ch <- flickrapi.PhotosSearchJson{}
-		return
+		return flickrapi.PhotosSearchJson{}, err
 	}
 
 	q := u.Query()
@@ -46,27 +63,34 @@ func getPhotosSearch(conf flickrapi.Config, pageNum string, ch chan<- flickrapi.
 
 	resp, err := http.Get(u.String())
 	if err != nil {
-		fmt.Println(err)
-		ch <- flickrapi.PhotosSearchJson{}
-		return
+		return flickrapi.PhotosSearchJson{}, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		fmt.Println(resp.StatusCode)
-		ch <- flickrapi.PhotosSearchJson{}
-		return
+		return flickrapi.PhotosSearchJson{}, fmt.Errorf("error: Response status is %d", resp.StatusCode)
 	}
 
 	var photosSearchJson flickrapi.PhotosSearchJson
 	err = json.NewDecoder(resp.Body).Decode(&photosSearchJson)
 	if err != nil {
-		fmt.Println(err)
-		ch <- flickrapi.PhotosSearchJson{}
-		return
+		return flickrapi.PhotosSearchJson{}, err
 	}
 
-	ch <- photosSearchJson
+	return photosSearchJson, nil
+}
+
+func SavePhotoWithContext(ctx context.Context, conf flickrapi.Config, photoList flickrapi.Photo, num int) error {
+	select {
+	case <-ctx.Done():
+		log.Fatal("error: Connection timeout")
+	default:
+		err := SavePhoto(conf, photoList, num)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func SavePhoto(conf flickrapi.Config, photoList flickrapi.Photo, num int) error {
@@ -114,15 +138,18 @@ func main() {
 	var photoList []flickrapi.Photo
 	var wg sync.WaitGroup
 	ch := make(chan flickrapi.PhotosSearchJson)
+	ctx, cancel := context.WithTimeout(context.Background(), TimeoutSeconds*time.Second)
+	//defer cancel()
+
 	for i := 1; i < 3; i++ {
 		wg.Add(1)
-		go getPhotosSearch(conf, strconv.Itoa(i), ch, &wg)
-
+		go getPhotosSearchWithContext(ctx, conf, strconv.Itoa(i), ch, &wg)
 	}
 
 	go func() {
 		wg.Wait()
 		close(ch)
+		cancel() //再利用するのでここでcancel()
 	}()
 
 	for json := range ch {
@@ -130,11 +157,33 @@ func main() {
 	}
 	//fmt.Println(photoList)
 
-	i := 0
-	for i < 3 {
-		tmp := rand.Intn(len(photoList) + 1)
-		SavePhoto(conf, photoList[tmp-1], i+1)
-		photoList = removeEl(photoList, tmp)
-		i++
+	var mu sync.Mutex
+	ctx, cancel = context.WithTimeout(context.Background(), TimeoutSeconds*time.Second)
+	defer cancel()
+
+	for i := 1; i < 4; i++ {
+		wg.Add(1)
+		tmp := rand.Intn(len(photoList))
+		go func(photo []flickrapi.Photo, tmp int, idx int) {
+			defer wg.Done()
+			errCnt := 0
+
+			for {
+				err := SavePhotoWithContext(ctx, conf, photoList[tmp], idx)
+				if err != nil && errCnt < 3 {
+					errCnt++
+					if 3 <= errCnt {
+						fmt.Println(err)
+						break
+					}
+				} else {
+					mu.Lock()
+					photoList = removeEl(photoList, tmp)
+					mu.Unlock()
+					break
+				}
+			}
+		}(photoList, tmp, i)
 	}
+	wg.Wait()
 }
