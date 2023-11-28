@@ -28,13 +28,13 @@ jobs:
       - name: get flickr photo
         run: go run main.go
       - name: configure aws credentials
-        uses: aws-actions/configure-aws-credentials@v1
+        uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_IAM_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
       # Upload a file to AWS s3
       - name:  Copy file to s3
         run: |
-          aws s3 cp data/image1.jpg s3://${{ env.BUCKET_NAME }}/
-          aws s3 cp data/image2.jpg s3://${{ env.BUCKET_NAME }}/
-          aws s3 cp data/image3.jpg s3://${{ env.BUCKET_NAME }}/
+          aws s3 cp image1.jpg s3://${{ env.BUCKET_NAME }}/
+          aws s3 cp image2.jpg s3://${{ env.BUCKET_NAME }}/
+          aws s3 cp image3.jpg s3://${{ env.BUCKET_NAME }}/

@@ -111,7 +111,7 @@ func SavePhoto(conf flickrapi.Config, photoList flickrapi.Photo, num int) error 
 		return err
 	}
 	defer resp.Body.Close()
-	file, err := os.Create("./data/image" + strconv.Itoa(num) + ".jpg")
+	file, err := os.Create("./image" + strconv.Itoa(num) + ".jpg")
 	if err != nil {
 		return err
 	}
