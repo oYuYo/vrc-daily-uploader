@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"sync"
 	"vrc-daily-uploader/flickrapi"
 )
 
@@ -23,10 +24,13 @@ func config() (flickrapi.Config, error) {
 	return conf, nil
 }
 
-func getPhotosSearch(conf flickrapi.Config, pageNum string) (flickrapi.PhotosSearchJson, error) {
+func getPhotosSearch(conf flickrapi.Config, pageNum string, ch chan<- flickrapi.PhotosSearchJson, wg *sync.WaitGroup) {
+	defer wg.Done()
+
 	u, err := url.Parse(conf.SearchEndPoint)
 	if err != nil {
-		return flickrapi.PhotosSearchJson{}, err
+		ch <- flickrapi.PhotosSearchJson{}
+		return
 	}
 
 	q := u.Query()
@@ -38,23 +42,31 @@ func getPhotosSearch(conf flickrapi.Config, pageNum string) (flickrapi.PhotosSea
 	q.Set("nojsoncallback", "1")
 	u.RawQuery = q.Encode()
 
-	fmt.Println(u.String())
+	//fmt.Println(u.String())
 
 	resp, err := http.Get(u.String())
 	if err != nil {
-		return flickrapi.PhotosSearchJson{}, err
+		fmt.Println(err)
+		ch <- flickrapi.PhotosSearchJson{}
+		return
 	}
 	defer resp.Body.Close()
+
 	if resp.StatusCode != http.StatusOK {
-		return flickrapi.PhotosSearchJson{}, err
+		fmt.Println(resp.StatusCode)
+		ch <- flickrapi.PhotosSearchJson{}
+		return
 	}
+
 	var photosSearchJson flickrapi.PhotosSearchJson
 	err = json.NewDecoder(resp.Body).Decode(&photosSearchJson)
 	if err != nil {
-		return flickrapi.PhotosSearchJson{}, err
+		fmt.Println(err)
+		ch <- flickrapi.PhotosSearchJson{}
+		return
 	}
 
-	return photosSearchJson, nil
+	ch <- photosSearchJson
 }
 
 func SavePhoto(conf flickrapi.Config, photoList flickrapi.Photo, num int) error {
@@ -68,7 +80,7 @@ func SavePhoto(conf flickrapi.Config, photoList flickrapi.Photo, num int) error 
 	if err != nil {
 		return err
 	}
-	fmt.Println(u)
+	//fmt.Println(u)
 
 	resp, err := http.Get(u)
 	if err != nil {
@@ -88,32 +100,41 @@ func SavePhoto(conf flickrapi.Config, photoList flickrapi.Photo, num int) error 
 	return nil
 }
 
+// 指定したindexを削除したスライスを返す
+func removeEl(photoList []flickrapi.Photo, num int) []flickrapi.Photo {
+	return append(photoList[:num], photoList[num+1:]...)
+}
+
 func main() {
 	conf, err := config()
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	var photosSearchJson flickrapi.PhotosSearchJson
 	var photoList []flickrapi.Photo
-
+	var wg sync.WaitGroup
+	ch := make(chan flickrapi.PhotosSearchJson)
 	for i := 1; i < 3; i++ {
-		photosSearchJson, err = getPhotosSearch(conf, strconv.Itoa(i))
-		if err != nil {
-			log.Fatal(err)
-		}
-		photoList = append(photoList, photosSearchJson.Photos.PhotoList...)
+		wg.Add(1)
+		go getPhotosSearch(conf, strconv.Itoa(i), ch, &wg)
+
 	}
 
-	var t int
+	go func() {
+		wg.Wait()
+		close(ch)
+	}()
+
+	for json := range ch {
+		photoList = append(photoList, json.Photos.PhotoList...)
+	}
+	//fmt.Println(photoList)
+
 	i := 0
 	for i < 3 {
 		tmp := rand.Intn(len(photoList) + 1)
-		if t != tmp {
-			t = tmp
-			fmt.Println(t)
-			SavePhoto(conf, photoList[t-1], i+1)
-			i++
-		}
+		SavePhoto(conf, photoList[tmp-1], i+1)
+		photoList = removeEl(photoList, tmp)
+		i++
 	}
 }
