@@ -1,10 +1,10 @@
 name: vrc daily uploader
 on:
-  #push:
-  #  branches:
-  #    - main 
-  #schedule:
-  #  - cron: '0 14 * * *' #23:00(JST)に実行
+  push:
+    branches:
+      - main 
+  schedule:
+    - cron: '0 14 * * *' #23:00(JST)に実行
   workflow_dispatch:
 env:
   BUCKET_NAME : "my-video-vrc"
